@@ -1,4 +1,4 @@
-# Blue Moon AI — Blender add-on.
+# blmn.ai — Blender add-on.
 #
 # Distributed as a legacy (bl_info) add-on so it can self-update from this
 # repository's GitHub releases via the bundled CGCookie addon updater. The
@@ -8,12 +8,12 @@ import bpy
 import importlib
 
 bl_info = {
-    "name": "BLUE MOON AI — Render",
-    "author": "Blue Moon AI <support@blmn.ai>",
-    "version": (1, 1, 1),
+    "name": "blmn.ai — Render",
+    "author": "blmn.ai <support@blmn.ai>",
+    "version": (1, 1, 2),
     "blender": (4, 2, 0),
-    "location": "View3D > Sidebar (N) > Blue Moon",
-    "description": "Render your viewport or camera view with BLUE MOON AI",
+    "location": "View3D > Sidebar (N) > blmn.ai",
+    "description": "Render your viewport or camera view with blmn.ai",
     "doc_url": "https://blmn.ai/blender",
     "tracker_url": "https://blmn.ai/blender",
     "category": "Render",

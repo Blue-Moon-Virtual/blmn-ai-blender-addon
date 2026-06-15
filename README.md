@@ -1,6 +1,6 @@
-# BLUE MOON AI — Blender Add-on
+# blmn.ai — Blender Add-on
 
-Render your Blender viewport or active-camera view with [BLUE MOON AI](https://blmn.ai),
+Render your Blender viewport or active-camera view with [blmn.ai](https://blmn.ai),
 using the same API routes, credit ledger and plan gating as the web Render tool.
 
 This repository is the **single source of truth** for the add-on. The binary
@@ -15,17 +15,17 @@ Requires **Blender 4.2+**.
 1. Download **`blmn-ai-blender-addon.zip`** from the
    [latest release](../../releases/latest) (or from blmn.ai/blender).
 2. In Blender: **Edit → Preferences → Add-ons → ▾ (top-right) → Install from Disk…**,
-   pick the zip, and enable **BLUE MOON AI — Render**.
+   pick the zip, and enable **blmn.ai — Render**.
 3. In the add-on preferences, click **Get Connect Code** (opens blmn.ai/blender,
    requires login), paste the one-time code, and click **Link Account**.
-4. Render from the **Blue Moon** tab in the 3D viewport sidebar (press `N`).
+4. Render from the **blmn.ai** tab in the 3D viewport sidebar (press `N`).
 
 ## Updates
 
 The add-on bundles the [CGCookie Blender Add-on Updater](https://github.com/CGCookie/blender-addon-updater).
 With **Auto-check for Update** enabled (on by default, daily) the add-on checks
 this repo's releases and offers a one-click update; you can also check manually
-in **Preferences → Add-ons → BLUE MOON AI — Render → Updates**. Updates install
+in **Preferences → Add-ons → blmn.ai — Render → Updates**. Updates install
 the same release-attached `blmn-ai-blender-addon.zip` that blmn.ai serves, so the
 in-app updater and a fresh manual download always match.
 

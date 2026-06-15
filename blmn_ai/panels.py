@@ -1,4 +1,4 @@
-"""N-panel UI in the 3D Viewport sidebar ("Blue Moon" tab).
+"""N-panel UI in the 3D Viewport sidebar ("blmn.ai" tab).
 
 Mirrors the web Render tool settings bar: model, scene type, style, sliders,
 resolution, seed. Account connection lives in the add-on Preferences; the
@@ -25,11 +25,11 @@ def _status_icon(status):
 
 
 class BLMN_PT_main(Panel):
-    bl_label = "BLUE MOON AI"
+    bl_label = "blmn.ai"
     bl_idname = "BLMN_PT_main"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
-    bl_category = "Blue Moon"
+    bl_category = "blmn.ai"
 
     def draw(self, context):
         layout = self.layout
@@ -146,7 +146,7 @@ class BLMN_PT_history(Panel):
     bl_parent_id = "BLMN_PT_main"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
-    bl_category = "Blue Moon"
+    bl_category = "blmn.ai"
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):

@@ -138,7 +138,7 @@ class BLMN_OT_capture_preview(Operator):
 class BLMN_OT_generate(Operator):
     bl_idname = "blmn.generate_render"
     bl_label = "Generate Render"
-    bl_description = "Capture the view and render it with Blue Moon AI (charges credits like the web app)"
+    bl_description = "Capture the view and render it with blmn.ai (charges credits like the web app)"
     bl_options = {"REGISTER"}
 
     _timer = None

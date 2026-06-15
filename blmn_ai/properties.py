@@ -125,7 +125,7 @@ class BLMNProperties(PropertyGroup):
 
     model: EnumProperty(
         name="Model",
-        description="Which Blue Moon AI model renders your view",
+        description="Which blmn.ai model renders your view",
         items=MODELS,
         default="light",
     )
