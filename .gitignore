@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Build output (release zips are produced by the workflow / build.sh)
+*.zip
+/dist/
+
+# CGCookie updater runtime staging (created inside the install dir at runtime)
+*_updater/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

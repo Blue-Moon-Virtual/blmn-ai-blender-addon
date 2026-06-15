@@ -1,0 +1,43 @@
+name: Release
+
+# Cut a release by pushing a version tag, e.g.:
+#   git tag v1.1.2 && git push origin v1.1.2
+# The tag must match the bl_info version in blmn_ai/__init__.py.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag matches bl_info version
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#v}"
+          BL_VERSION="$(python3 -c "import ast; src=open('blmn_ai/__init__.py').read(); tree=ast.parse(src); bl=[n for n in ast.walk(tree) if isinstance(n,ast.Assign) and any(getattr(t,'id',None)=='bl_info' for t in n.targets)][0]; d=ast.literal_eval(bl.value); print('.'.join(map(str, d['version'])))")"
+          echo "tag=$TAG  bl_info=$BL_VERSION"
+          if [ "$TAG" != "$BL_VERSION" ]; then
+            echo "::error::Tag v$TAG does not match bl_info version $BL_VERSION in blmn_ai/__init__.py"
+            exit 1
+          fi
+
+      - name: Build add-on zip
+        run: |
+          set -euo pipefail
+          python3 build.py
+          ls -l dist
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/blmn-ai-blender-addon.zip
+          generate_release_notes: true
+          fail_on_unmatched_files: true
