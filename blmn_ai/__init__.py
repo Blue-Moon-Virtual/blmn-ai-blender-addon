@@ -8,9 +8,9 @@ import bpy
 import importlib
 
 bl_info = {
-    "name": "blmn.ai — Render",
+    "name": "blmn.ai",
     "author": "blmn.ai <support@blmn.ai>",
-    "version": (1, 1, 2),
+    "version": (1, 1, 3),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar (N) > blmn.ai",
     "description": "Render your viewport or camera view with blmn.ai",

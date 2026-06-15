@@ -6,6 +6,7 @@ panel only shows a short status line with credits.
 """
 import os
 import bpy
+import bpy.utils.previews
 from bpy.types import Panel
 
 from . import properties as props
@@ -14,6 +15,29 @@ from . import net
 from . import operators
 from . import utils
 from . import addon_updater_ops
+
+# Number of recent renders shown (with thumbnails) in the History panel.
+HISTORY_VISIBLE = 6
+
+# Preview collection backing the History thumbnails. Loading from disk here
+# (rather than bpy.data.images.load) keeps result images out of the .blend.
+_thumbs = None
+
+
+def _thumb_icon_id(result_path):
+    """Return an icon_id for a result image's thumbnail, or 0 if unavailable."""
+    if _thumbs is None or not result_path:
+        return 0
+    abspath = bpy.path.abspath(result_path)
+    if not os.path.isfile(abspath):
+        return 0
+    entry = _thumbs.get(abspath)
+    if entry is None:
+        try:
+            entry = _thumbs.load(abspath, abspath, "IMAGE")
+        except (KeyError, RuntimeError):
+            return 0
+    return entry.icon_id
 
 
 def _status_icon(status):
@@ -56,17 +80,27 @@ class BLMN_PT_main(Panel):
                 box.label(text=prefs.account_email)
         else:
             box.label(text="Not connected", icon="ERROR")
-            box.label(text="Connect in Add-on Preferences")
+            col = box.column(align=True)
+            col.label(text="1. Get a one-time code")
+            col.label(text="2. Paste it below and Link")
             box.operator("blmn.open_connect_page", icon="URL")
+            row = box.row(align=True)
+            row.prop(prefs, "connect_code", text="Code")
+            row.operator("blmn.link_account", text="", icon="LINKED")
             return
 
         # --- Input ---
         box = layout.box()
         box.label(text="Capture", icon="OUTLINER_OB_CAMERA")
         box.prop(sp, "source", text="")
-        row = box.row()
+        # One visual bar of three controls: preview-window picker (icon),
+        # camera-from-view (icon, greyed when a camera exists), Preview (text).
+        row = box.row(align=True)
         row.enabled = not busy
-        row.operator("blmn.capture_preview", icon="RESTRICT_RENDER_OFF")
+        row.operator("blmn.open_preview_target", text="", icon="RENDER_RESULT",
+                     depress=utils.has_image_editor(context))
+        row.operator("blmn.camera_from_view", text="", icon="VIEW_CAMERA")
+        row.operator("blmn.capture_preview", text="Preview", icon="HIDE_OFF")
 
         # --- Model + settings ---
         box = layout.box()
@@ -155,9 +189,40 @@ class BLMN_PT_history(Panel):
         if not entries:
             layout.label(text="No renders yet")
             return
-        for entry in entries[:8]:
-            layout.label(text="• " + entry.get("label", "Render"), icon="IMAGE_DATA")
+        for entry in entries[:HISTORY_VISIBLE]:
+            _draw_history_entry(layout, entry)
         layout.label(text="Full history: blmn.ai → Library", icon="URL")
+
+
+def _draw_history_entry(layout, entry):
+    """One history row: thumbnail + model + prompt (or 'No prompt') + View."""
+    result_path = entry.get("result_path", "")
+    has_result = bool(result_path) and os.path.isfile(bpy.path.abspath(result_path))
+
+    box = layout.box()
+    row = box.row()
+
+    icon_id = _thumb_icon_id(result_path) if has_result else 0
+    if icon_id:
+        row.template_icon(icon_value=icon_id, scale=5.0)
+    else:
+        row.label(text="", icon="IMAGE_DATA")
+
+    col = row.column(align=True)
+    col.label(text=entry.get("model") or "Render", icon="SHADERFX")
+
+    prompt = (entry.get("prompt") or "").strip()
+    if prompt:
+        col.label(text=prompt[:32] + ("…" if len(prompt) > 32 else ""),
+                  icon="GREASEPENCIL")
+    else:
+        sub = col.row()
+        sub.active = False
+        sub.label(text="No prompt", icon="GREASEPENCIL")
+
+    if has_result:
+        op = col.operator("blmn.show_image", text="View", icon="IMAGE_DATA")
+        op.filepath = result_path
 
 
 def _draw_image_preview(layout, image):
@@ -191,10 +256,16 @@ _classes = (BLMN_PT_main, BLMN_PT_history)
 
 
 def register():
+    global _thumbs
+    _thumbs = bpy.utils.previews.new()
     for cls in _classes:
         bpy.utils.register_class(cls)
 
 
 def unregister():
+    global _thumbs
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)
+    if _thumbs is not None:
+        bpy.utils.previews.remove(_thumbs)
+        _thumbs = None

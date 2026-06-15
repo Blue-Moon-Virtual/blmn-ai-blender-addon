@@ -130,7 +130,7 @@ class BLMN_OT_capture_preview(Operator):
 
         sp.last_capture_path = path
         img = utils.load_image(path, name="blmn_capture")
-        utils.open_in_image_editor(img)
+        utils.open_in_image_editor(img, context)
         self.report({"INFO"}, "Capture created.")
         return {"FINISHED"}
 
@@ -234,7 +234,7 @@ class BLMN_OT_generate(Operator):
         result_path = data["result_path"]
         sp.last_result_path = result_path
         img = utils.load_image(result_path, name="blmn_result")
-        utils.open_in_image_editor(img)
+        utils.open_in_image_editor(img, context)
 
         history.add(
             self._out_dir, sp.prompt.strip(), self._model_label,
@@ -283,9 +283,126 @@ class BLMN_OT_view_result(Operator):
     def execute(self, context):
         sp = context.scene.blmn_ai
         img = utils.load_image(sp.last_result_path, name="blmn_result")
-        if not utils.open_in_image_editor(img):
-            self.report({"WARNING"}, "Open an Image Editor area to view results.")
+        if not utils.open_in_image_editor(img, context):
+            self.report({"WARNING"}, "Could not open the result image.")
             return {"CANCELLED"}
+        return {"FINISHED"}
+
+
+class BLMN_OT_show_image(Operator):
+    bl_idname = "blmn.show_image"
+    bl_label = "View Image"
+    bl_description = "Open this render in the Image Editor (a new window if none is open)"
+    bl_options = {"REGISTER", "INTERNAL"}
+
+    filepath: bpy.props.StringProperty(default="", options={"HIDDEN", "SKIP_SAVE"})
+
+    def execute(self, context):
+        img = utils.load_image(self.filepath, name="blmn_result")
+        if img is None or not utils.open_in_image_editor(img, context):
+            self.report({"WARNING"}, "Could not open the image.")
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
+def _latest_preview_image(context):
+    """The most recent result or capture image, loaded, or None."""
+    sp = context.scene.blmn_ai
+    path = sp.last_result_path or sp.last_capture_path
+    if not path or not os.path.isfile(bpy.path.abspath(path)):
+        return None
+    return utils.load_image(path, name="blmn_result")
+
+
+def _draw_preview_target_menu(menu, context):
+    layout = menu.layout
+    op = layout.operator("blmn.spawn_image_editor", text="New Window", icon="ADD")
+    op.window_index = -1
+    windows = context.window_manager.windows
+    if windows:
+        layout.separator()
+        for i, win in enumerate(windows):
+            has_ie = any(a.type == "IMAGE_EDITOR" for a in win.screen.areas)
+            label = "Current Window" if win == context.window else "Window {0}".format(i + 1)
+            if has_ie:
+                label += " (reuse)"
+            op = layout.operator(
+                "blmn.spawn_image_editor",
+                text=label,
+                icon="IMAGE_DATA" if has_ie else "WINDOW",
+            )
+            op.window_index = i
+
+
+class BLMN_OT_open_preview_target(Operator):
+    bl_idname = "blmn.open_preview_target"
+    bl_label = "Preview Window"
+    bl_description = ("Choose where renders preview — a new window or split into "
+                      "an existing one. Highlighted when an Image Editor is open")
+    bl_options = {"REGISTER", "INTERNAL"}
+
+    def invoke(self, context, event):
+        context.window_manager.popup_menu(
+            _draw_preview_target_menu, title="Open Preview In", icon="RENDER_RESULT")
+        return {"FINISHED"}
+
+    def execute(self, context):
+        return {"FINISHED"}
+
+
+class BLMN_OT_spawn_image_editor(Operator):
+    bl_idname = "blmn.spawn_image_editor"
+    bl_label = "Open Preview Editor"
+    bl_description = "Open an Image Editor here to preview captures and renders"
+    bl_options = {"REGISTER", "INTERNAL"}
+
+    window_index: bpy.props.IntProperty(default=-1, options={"HIDDEN", "SKIP_SAVE"})
+
+    def execute(self, context):
+        img = _latest_preview_image(context)
+        if not utils.show_preview_in_window(context, self.window_index, img):
+            self.report({"WARNING"}, "Could not open an Image Editor.")
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
+class BLMN_OT_camera_from_view(Operator):
+    bl_idname = "blmn.camera_from_view"
+    bl_label = "Camera From View"
+    bl_description = "Create a camera matching the current viewport view and make it the active camera"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        # Only offered when the scene has no camera at all — greyed otherwise.
+        return not any(o.type == "CAMERA" for o in context.scene.objects)
+
+    def execute(self, context):
+        scene = context.scene
+
+        space = None
+        if context.space_data and context.space_data.type == "VIEW_3D":
+            space = context.space_data
+        else:
+            for area in context.screen.areas:
+                if area.type == "VIEW_3D":
+                    space = area.spaces.active
+                    break
+
+        cam_data = bpy.data.cameras.new("blmn_Camera")
+        cam_obj = bpy.data.objects.new("blmn_Camera", cam_data)
+        scene.collection.objects.link(cam_obj)
+
+        if space is not None:
+            if space.region_3d is not None:
+                cam_obj.matrix_world = space.region_3d.view_matrix.inverted()
+            # Match the viewport's focal length so framing lines up.
+            if getattr(space, "lens", 0):
+                cam_data.lens = space.lens
+
+        scene.camera = cam_obj
+        context.scene.blmn_ai.source = "CAMERA"
+        self.report({"INFO"}, "Camera created from current view.")
         return {"FINISHED"}
 
 
@@ -382,6 +499,10 @@ _classes = (
     BLMN_OT_generate,
     BLMN_OT_refresh_credits,
     BLMN_OT_view_result,
+    BLMN_OT_show_image,
+    BLMN_OT_open_preview_target,
+    BLMN_OT_spawn_image_editor,
+    BLMN_OT_camera_from_view,
     BLMN_OT_open_output,
     BLMN_OT_add_reference,
     BLMN_OT_remove_reference,

@@ -15,9 +15,10 @@ Requires **Blender 4.2+**.
 1. Download **`blmn-ai-blender-addon.zip`** from the
    [latest release](../../releases/latest) (or from blmn.ai/blender).
 2. In Blender: **Edit → Preferences → Add-ons → ▾ (top-right) → Install from Disk…**,
-   pick the zip, and enable **blmn.ai — Render**.
-3. In the add-on preferences, click **Get Connect Code** (opens blmn.ai/blender,
-   requires login), paste the one-time code, and click **Link Account**.
+   pick the zip, and enable **blmn.ai**.
+3. Click **Get Connect Code** (opens blmn.ai/blender, requires login), paste the
+   one-time code, and click **Link**. You can do this either in the add-on
+   preferences or directly in the **blmn.ai** sidebar tab.
 4. Render from the **blmn.ai** tab in the 3D viewport sidebar (press `N`).
 
 ## Updates
@@ -25,7 +26,7 @@ Requires **Blender 4.2+**.
 The add-on bundles the [CGCookie Blender Add-on Updater](https://github.com/CGCookie/blender-addon-updater).
 With **Auto-check for Update** enabled (on by default, daily) the add-on checks
 this repo's releases and offers a one-click update; you can also check manually
-in **Preferences → Add-ons → blmn.ai — Render → Updates**. Updates install
+in **Preferences → Add-ons → blmn.ai → Updates**. Updates install
 the same release-attached `blmn-ai-blender-addon.zip` that blmn.ai serves, so the
 in-app updater and a fresh manual download always match.
 
