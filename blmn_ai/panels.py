@@ -94,11 +94,9 @@ class BLMN_PT_main(Panel):
         box = layout.box()
         box.label(text="Capture", icon="OUTLINER_OB_CAMERA")
         box.prop(sp, "source", text="")
-        # One visual bar of preview controls, camera helper, and capture.
+        # One visual bar of preview target, camera helper, and capture.
         row = box.row(align=True)
         row.enabled = not busy
-        row.operator("blmn.open_preview_target", text="", icon="RENDER_RESULT",
-                     depress=utils.has_image_editor(context))
         row.operator("blmn.pick_preview_area", text="", icon="EYEDROPPER",
                      depress=operators.BLMN_OT_pick_preview_area.is_active())
         row.operator("blmn.camera_from_view", text="", icon="VIEW_CAMERA")
@@ -154,13 +152,18 @@ class BLMN_PT_main(Panel):
             box.operator("blmn.add_reference", text="Add Reference", icon="ADD")
 
         # --- Generate ---
+        preview_ready = operators._preview_capture_exists(sp)
         col = layout.column()
         col.scale_y = 1.5
-        col.enabled = not busy
+        col.enabled = not busy and preview_ready
         cost = sp.estimated_credits()
         cost_label = "Generate ({0} credit{1})".format(cost, "" if cost == 1 else "s") \
             if cost else "Generate (no credits)"
         col.operator("blmn.generate_render", text=cost_label, icon="SHADERFX")
+        if not preview_ready:
+            row = layout.row()
+            row.active = False
+            row.label(text="Click Preview before Generate", icon="INFO")
 
         # --- Status ---
         row = layout.row()
@@ -282,7 +285,12 @@ def register():
 def unregister():
     global _thumbs
     for cls in reversed(_classes):
-        bpy.utils.unregister_class(cls)
+        try:
+            bpy.utils.unregister_class(cls)
+        except Exception as exc:  # noqa: BLE001 - Blender reload state can be partially stale.
+            if "missing bl_rna" not in str(exc) and "is not registered" not in str(exc):
+                raise
+            utils.log("Panel unregister skipped:", cls.__name__, exc)
     if _thumbs is not None:
         bpy.utils.previews.remove(_thumbs)
         _thumbs = None

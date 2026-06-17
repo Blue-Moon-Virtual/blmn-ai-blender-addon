@@ -135,10 +135,15 @@ class BLMN_OT_capture_preview(Operator):
         return {"FINISHED"}
 
 
+def _preview_capture_exists(sp):
+    path = (sp.last_capture_path or "").strip()
+    return bool(path) and os.path.isfile(bpy.path.abspath(path))
+
+
 class BLMN_OT_generate(Operator):
     bl_idname = "blmn.generate_render"
     bl_label = "Generate Render"
-    bl_description = "Capture the view and render it with blmn.ai (charges credits like the web app)"
+    bl_description = "Render the last Preview capture with blmn.ai (charges credits like the web app)"
     bl_options = {"REGISTER"}
 
     _timer = None
@@ -154,7 +159,7 @@ class BLMN_OT_generate(Operator):
         sp = context.scene.blmn_ai
         if sp.is_busy():
             return False
-        return utils.prefs(context).connected()
+        return utils.prefs(context).connected() and _preview_capture_exists(sp)
 
     def execute(self, context):
         sp = context.scene.blmn_ai
@@ -164,22 +169,22 @@ class BLMN_OT_generate(Operator):
             self.report({"ERROR"}, "Connect your blmn.ai account in the add-on preferences first.")
             return {"CANCELLED"}
 
+        if not _preview_capture_exists(sp):
+            self.report({"ERROR"}, "Click Preview first so Generate has a captured image to render.")
+            return {"CANCELLED"}
+
         # Install any CF Access headers before the worker thread starts (the
         # thread reads the module-level headers set here on the main thread).
         prefs.apply_access()
 
-        # --- Capture (synchronous, fast, main thread) ---
-        _set_status(sp, props.STATUS_CAPTURING)
         try:
             self._out_dir = utils.get_output_dir(context)
-            self._capture_path = os.path.join(self._out_dir, utils.make_filename("capture"))
-            capture.capture_view(context, sp.source, self._capture_path)
         except ValueError as exc:
             _set_status(sp, props.STATUS_FAILED, str(exc))
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
 
-        sp.last_capture_path = self._capture_path
+        self._capture_path = bpy.path.abspath(sp.last_capture_path)
         self._model_label = dict((m[0], m[1]) for m in props.MODELS).get(sp.model, sp.model)
 
         # --- Hand the network pipeline to a worker thread ---
@@ -352,23 +357,6 @@ def _latest_preview_image(context):
     if not path or not os.path.isfile(bpy.path.abspath(path)):
         return None
     return utils.load_image(path, name="blmn_result")
-
-
-class BLMN_OT_open_preview_target(Operator):
-    bl_idname = "blmn.open_preview_target"
-    bl_label = "Preview Window"
-    bl_options = {"REGISTER", "INTERNAL"}
-    bl_description = "Open or create the blmn.ai workspace for previews"
-
-    def invoke(self, context, event):
-        return self.execute(context)
-
-    def execute(self, context):
-        img = _latest_preview_image(context)
-        if not utils.ensure_preview_workspace(context, img):
-            self.report({"WARNING"}, "Could not open the blmn.ai workspace.")
-            return {"CANCELLED"}
-        return {"FINISHED"}
 
 
 class BLMN_OT_pick_preview_area(Operator):
@@ -560,7 +548,6 @@ _classes = (
     BLMN_OT_edit_prompt,
     BLMN_OT_view_result,
     BLMN_OT_show_image,
-    BLMN_OT_open_preview_target,
     BLMN_OT_pick_preview_area,
     BLMN_OT_camera_from_view,
     BLMN_OT_open_output,

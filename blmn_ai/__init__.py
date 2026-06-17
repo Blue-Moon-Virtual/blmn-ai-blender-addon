@@ -61,10 +61,13 @@ def unregister():
     if hasattr(bpy.types.Scene, "blmn_ai"):
         del bpy.types.Scene.blmn_ai
 
-    panels.unregister()
-    operators.unregister()
-    preferences.unregister()
-    properties.unregister()
+    for module in (panels, operators, preferences, properties):
+        try:
+            module.unregister()
+        except Exception as exc:  # noqa: BLE001 - tolerate Blender partial reload state.
+            if "missing bl_rna" not in str(exc) and "is not registered" not in str(exc):
+                raise
+            utils.log("Module unregister skipped:", module.__name__, exc)
 
     addon_updater_ops.unregister()
 
