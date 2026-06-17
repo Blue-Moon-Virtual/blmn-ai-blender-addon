@@ -5,6 +5,7 @@ passwords or API keys are ever typed into Blender. The resulting device token
 only allows rendering/upload/credit endpoints and can be revoked from the web
 app at any time.
 """
+import os
 import webbrowser
 
 import bpy
@@ -106,14 +107,6 @@ class BLMNPreferences(AddonPreferences):
         subtype="DIR_PATH",
         default="",
     )
-    history_limit: IntProperty(
-        name="History Limit",
-        description="How many recent renders to keep in local history",
-        default=20,
-        min=1,
-        max=200,
-    )
-
     api_environment: EnumProperty(
         name="Environment",
         items=[
@@ -210,23 +203,30 @@ class BLMNPreferences(AddonPreferences):
         box = layout.box()
         box.label(text="Storage", icon="FILE_FOLDER")
         box.prop(self, "output_folder")
-        box.prop(self, "history_limit")
 
-        box = layout.box()
-        box.label(text="Advanced", icon="PREFERENCES")
-        box.prop(self, "api_environment")
-        if self.api_environment == "STAGING":
-            col = box.column(align=True)
-            col.label(text="Cloudflare Access service token (staging only):", icon="LOCKED")
-            col.prop(self, "cf_access_client_id")
-            col.prop(self, "cf_access_client_secret")
-            col.label(text="Leave empty on Production.", icon="INFO")
+        if _show_internal_settings(self):
+            box = layout.box()
+            box.label(text="Internal", icon="PREFERENCES")
+            box.prop(self, "api_environment")
+            if self.api_environment == "STAGING":
+                col = box.column(align=True)
+                col.label(text="Cloudflare Access service token (staging only):", icon="LOCKED")
+                col.prop(self, "cf_access_client_id")
+                col.prop(self, "cf_access_client_secret")
+                col.label(text="Leave empty on Production.", icon="INFO")
 
         # Updates — CGCookie addon updater UI (auto-check toggle, interval,
         # "Check now" / "Update now" buttons). Pulls from this repo's releases.
         box = layout.box()
         box.label(text="Updates", icon="FILE_REFRESH")
         addon_updater_ops.update_settings_ui(self, context, element=box)
+
+
+def _show_internal_settings(prefs):
+    """Expose staging controls only for internal sessions or existing staging users."""
+    if prefs.api_environment == "STAGING":
+        return True
+    return os.environ.get("BLMN_AI_INTERNAL") == "1"
 
 
 _classes = (
@@ -244,4 +244,9 @@ def register():
 
 def unregister():
     for cls in reversed(_classes):
-        bpy.utils.unregister_class(cls)
+        try:
+            bpy.utils.unregister_class(cls)
+        except RuntimeError as exc:
+            if "missing bl_rna" not in str(exc) and "is not registered" not in str(exc):
+                raise
+            utils.log("Preferences unregister skipped:", cls.__name__, exc)

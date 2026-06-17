@@ -5,6 +5,7 @@ resolution, seed. Account connection lives in the add-on Preferences; the
 panel only shows a short status line with credits.
 """
 import os
+import textwrap
 import bpy
 import bpy.utils.previews
 from bpy.types import Panel
@@ -93,12 +94,13 @@ class BLMN_PT_main(Panel):
         box = layout.box()
         box.label(text="Capture", icon="OUTLINER_OB_CAMERA")
         box.prop(sp, "source", text="")
-        # One visual bar of three controls: preview-window picker (icon),
-        # camera-from-view (icon, greyed when a camera exists), Preview (text).
+        # One visual bar of preview controls, camera helper, and capture.
         row = box.row(align=True)
         row.enabled = not busy
         row.operator("blmn.open_preview_target", text="", icon="RENDER_RESULT",
                      depress=utils.has_image_editor(context))
+        row.operator("blmn.pick_preview_area", text="", icon="EYEDROPPER",
+                     depress=operators.BLMN_OT_pick_preview_area.is_active())
         row.operator("blmn.camera_from_view", text="", icon="VIEW_CAMERA")
         row.operator("blmn.capture_preview", text="Preview", icon="HIDE_OFF")
 
@@ -125,9 +127,14 @@ class BLMN_PT_main(Panel):
 
         # --- Prompt ---
         box = layout.box()
-        box.label(text="Prompt (optional)", icon="GREASEPENCIL")
-        box.prop(sp, "prompt", text="")
+        row = box.row(align=True)
+        row.label(text="Prompt (optional)", icon="GREASEPENCIL")
+        row.operator("blmn.edit_prompt", text="", icon="GREASEPENCIL")
+        prompt_col = box.column()
+        prompt_col.scale_y = 1.35
+        prompt_col.prop(sp, "prompt", text="")
         if sp.prompt:
+            _draw_wrapped_prompt(box, sp.prompt)
             sub = box.row()
             sub.alignment = "RIGHT"
             sub.label(text="{0} / {1}".format(len(sp.prompt), props.PROMPT_MAX))
@@ -183,6 +190,9 @@ class BLMN_PT_history(Panel):
     bl_category = "blmn.ai"
     bl_options = {"DEFAULT_CLOSED"}
 
+    def draw_header(self, context):
+        self.layout.operator("blmn.refresh_history", text="", icon="FILE_REFRESH")
+
     def draw(self, context):
         layout = self.layout
         entries = _safe_history(context)
@@ -192,6 +202,13 @@ class BLMN_PT_history(Panel):
         for entry in entries[:HISTORY_VISIBLE]:
             _draw_history_entry(layout, entry)
         layout.label(text="Full history: blmn.ai → Library", icon="URL")
+
+
+def _draw_wrapped_prompt(layout, prompt):
+    box = layout.box()
+    col = box.column(align=True)
+    for line in textwrap.wrap(prompt.strip(), width=34) or [""]:
+        col.label(text=line)
 
 
 def _draw_history_entry(layout, entry):

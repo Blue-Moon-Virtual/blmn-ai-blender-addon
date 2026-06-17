@@ -1,8 +1,8 @@
 """Local render history stored as JSON in the output folder.
 
-Keeps the most recent N entries. Each entry records prompt, model, paths and a
-timestamp so the N-panel can show recent results. The user's full history also
-lives in their blmn.ai web library (results are persisted server-side).
+Each entry records prompt, model, paths and a timestamp so the N-panel can show
+recent results. The user's full history also lives in their blmn.ai web library
+(results are persisted server-side).
 """
 import json
 import os
@@ -30,7 +30,7 @@ def load(output_dir):
         return []
 
 
-def add(output_dir, prompt, model_label, capture_path, result_path, limit=20):
+def add(output_dir, prompt, model_label, capture_path, result_path):
     entries = load(output_dir)
     entries.insert(0, {
         "time": time.time(),
@@ -40,7 +40,6 @@ def add(output_dir, prompt, model_label, capture_path, result_path, limit=20):
         "capture_path": capture_path,
         "result_path": result_path,
     })
-    del entries[max(1, limit):]
 
     try:
         with open(_history_path(output_dir), "w", encoding="utf-8") as fh:

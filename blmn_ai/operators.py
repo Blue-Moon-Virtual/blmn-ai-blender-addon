@@ -239,8 +239,8 @@ class BLMN_OT_generate(Operator):
         history.add(
             self._out_dir, sp.prompt.strip(), self._model_label,
             self._capture_path, result_path,
-            limit=utils.prefs(context).history_limit,
         )
+        utils.tag_redraw_all()
 
         _set_status(sp, props.STATUS_FINISHED)
         self.report({"INFO"}, "Render finished.")
@@ -269,6 +269,46 @@ class BLMN_OT_refresh_credits(Operator):
         return {"FINISHED"}
 
 
+class BLMN_OT_refresh_history(Operator):
+    bl_idname = "blmn.refresh_history"
+    bl_label = "Refresh History"
+    bl_description = "Reload the local render history shown in the panel"
+    bl_options = {"REGISTER", "INTERNAL"}
+
+    def execute(self, context):
+        utils.tag_redraw_all()
+        return {"FINISHED"}
+
+
+class BLMN_OT_edit_prompt(Operator):
+    bl_idname = "blmn.edit_prompt"
+    bl_label = "Edit Prompt"
+    bl_description = "Edit the prompt in a wider input dialog"
+    bl_options = {"REGISTER", "INTERNAL"}
+
+    prompt: bpy.props.StringProperty(
+        name="Prompt",
+        description="Optional render prompt",
+        default="",
+        maxlen=props.PROMPT_MAX,
+        options={"SKIP_SAVE"},
+    )
+
+    def invoke(self, context, event):
+        self.prompt = context.scene.blmn_ai.prompt
+        return context.window_manager.invoke_props_dialog(self, width=640)
+
+    def draw(self, context):
+        col = self.layout.column()
+        col.scale_y = 1.4
+        col.prop(self, "prompt", text="")
+
+    def execute(self, context):
+        context.scene.blmn_ai.prompt = self.prompt
+        utils.tag_redraw_all()
+        return {"FINISHED"}
+
+
 class BLMN_OT_view_result(Operator):
     bl_idname = "blmn.view_result"
     bl_label = "View Result"
@@ -292,7 +332,7 @@ class BLMN_OT_view_result(Operator):
 class BLMN_OT_show_image(Operator):
     bl_idname = "blmn.show_image"
     bl_label = "View Image"
-    bl_description = "Open this render in the Image Editor (a new window if none is open)"
+    bl_description = "Open this render in the Image Editor"
     bl_options = {"REGISTER", "INTERNAL"}
 
     filepath: bpy.props.StringProperty(default="", options={"HIDDEN", "SKIP_SAVE"})
@@ -314,56 +354,74 @@ def _latest_preview_image(context):
     return utils.load_image(path, name="blmn_result")
 
 
-def _draw_preview_target_menu(menu, context):
-    layout = menu.layout
-    op = layout.operator("blmn.spawn_image_editor", text="New Window", icon="ADD")
-    op.window_index = -1
-    windows = context.window_manager.windows
-    if windows:
-        layout.separator()
-        for i, win in enumerate(windows):
-            has_ie = any(a.type == "IMAGE_EDITOR" for a in win.screen.areas)
-            label = "Current Window" if win == context.window else "Window {0}".format(i + 1)
-            if has_ie:
-                label += " (reuse)"
-            op = layout.operator(
-                "blmn.spawn_image_editor",
-                text=label,
-                icon="IMAGE_DATA" if has_ie else "WINDOW",
-            )
-            op.window_index = i
-
-
 class BLMN_OT_open_preview_target(Operator):
     bl_idname = "blmn.open_preview_target"
     bl_label = "Preview Window"
-    bl_description = ("Choose where renders preview — a new window or split into "
-                      "an existing one. Highlighted when an Image Editor is open")
     bl_options = {"REGISTER", "INTERNAL"}
+    bl_description = "Open or create the blmn.ai workspace for previews"
 
     def invoke(self, context, event):
-        context.window_manager.popup_menu(
-            _draw_preview_target_menu, title="Open Preview In", icon="RENDER_RESULT")
-        return {"FINISHED"}
-
-    def execute(self, context):
-        return {"FINISHED"}
-
-
-class BLMN_OT_spawn_image_editor(Operator):
-    bl_idname = "blmn.spawn_image_editor"
-    bl_label = "Open Preview Editor"
-    bl_description = "Open an Image Editor here to preview captures and renders"
-    bl_options = {"REGISTER", "INTERNAL"}
-
-    window_index: bpy.props.IntProperty(default=-1, options={"HIDDEN", "SKIP_SAVE"})
+        return self.execute(context)
 
     def execute(self, context):
         img = _latest_preview_image(context)
-        if not utils.show_preview_in_window(context, self.window_index, img):
-            self.report({"WARNING"}, "Could not open an Image Editor.")
+        if not utils.ensure_preview_workspace(context, img):
+            self.report({"WARNING"}, "Could not open the blmn.ai workspace.")
             return {"CANCELLED"}
         return {"FINISHED"}
+
+
+class BLMN_OT_pick_preview_area(Operator):
+    bl_idname = "blmn.pick_preview_area"
+    bl_label = "Select Preview Area"
+    bl_description = "Click an editor area to turn it into the blmn.ai preview Image Editor"
+    bl_options = {"REGISTER", "INTERNAL"}
+
+    _active = False
+
+    @classmethod
+    def is_active(cls):
+        return cls._active
+
+    def invoke(self, context, event):
+        cls = self.__class__
+        if cls._active:
+            cls._active = False
+            utils.tag_redraw_all()
+            return {"CANCELLED"}
+        cls._active = True
+        context.window_manager.modal_handler_add(self)
+        utils.tag_redraw_all()
+        self.report({"INFO"}, "Click an editor area for the blmn.ai preview.")
+        return {"RUNNING_MODAL"}
+
+    def modal(self, context, event):
+        cls = self.__class__
+        if not cls._active:
+            return {"CANCELLED"}
+        if event.type in {"ESC", "RIGHTMOUSE"}:
+            cls._active = False
+            utils.tag_redraw_all()
+            return {"CANCELLED"}
+        if event.type == "LEFTMOUSE" and event.value == "PRESS":
+            area = _area_at_mouse(context.window.screen, event.mouse_x, event.mouse_y)
+            img = _latest_preview_image(context)
+            if area is not None and utils.show_image_in_area(context, area, img):
+                cls._active = False
+                utils.tag_redraw_all()
+                return {"FINISHED"}
+            cls._active = False
+            utils.tag_redraw_all()
+            self.report({"WARNING"}, "Could not use that area for preview.")
+            return {"CANCELLED"}
+        return {"RUNNING_MODAL"}
+
+
+def _area_at_mouse(screen, mouse_x, mouse_y):
+    for area in screen.areas:
+        if area.x <= mouse_x < area.x + area.width and area.y <= mouse_y < area.y + area.height:
+            return area
+    return None
 
 
 class BLMN_OT_camera_from_view(Operator):
@@ -498,10 +556,12 @@ _classes = (
     BLMN_OT_capture_preview,
     BLMN_OT_generate,
     BLMN_OT_refresh_credits,
+    BLMN_OT_refresh_history,
+    BLMN_OT_edit_prompt,
     BLMN_OT_view_result,
     BLMN_OT_show_image,
     BLMN_OT_open_preview_target,
-    BLMN_OT_spawn_image_editor,
+    BLMN_OT_pick_preview_area,
     BLMN_OT_camera_from_view,
     BLMN_OT_open_output,
     BLMN_OT_add_reference,
