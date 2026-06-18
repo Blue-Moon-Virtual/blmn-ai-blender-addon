@@ -4,6 +4,7 @@ Keep user-facing errors short (panel/report); log technical detail to console.
 """
 import os
 import time
+import uuid
 import bpy
 
 LOG_PREFIX = "[blmn.ai]"
@@ -54,6 +55,15 @@ def timestamp():
 def make_filename(kind, ext="png"):
     """kind is e.g. 'capture' or 'result'."""
     return "blmn_{0}_{1}.{2}".format(kind, timestamp(), ext)
+
+
+def make_unique_filename(kind, ext="png"):
+    """Like make_filename but with a short random suffix.
+
+    Used for per-job files (e.g. the input copy each Generate snapshots), so
+    several generations fired within the same second never collide.
+    """
+    return "blmn_{0}_{1}_{2}.{3}".format(kind, timestamp(), uuid.uuid4().hex[:6], ext)
 
 
 def load_image(filepath, name=None, reuse=True):

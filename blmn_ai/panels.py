@@ -6,16 +6,22 @@ panel only shows a short status line with credits.
 """
 import os
 import textwrap
+import time
 import bpy
 import bpy.utils.previews
 from bpy.types import Panel
 
 from . import properties as props
 from . import history
+from . import jobs
 from . import net
 from . import operators
 from . import utils
 from . import addon_updater_ops
+
+# Braille spinner frames for the generating tray when UILayout.progress() is
+# unavailable. Cycled by wall-clock time so successive panel repaints animate.
+_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 # Number of recent renders shown (with thumbnails) in the History panel.
 HISTORY_VISIBLE = 6
@@ -41,12 +47,44 @@ def _thumb_icon_id(result_path):
     return entry.icon_id
 
 
-def _status_icon(status):
-    return {
-        props.STATUS_IDLE: "CHECKMARK",
-        props.STATUS_FINISHED: "CHECKMARK",
-        props.STATUS_FAILED: "ERROR",
-    }.get(status, "SORTTIME")
+def _draw_job(layout, job):
+    """One generating-tray row: input thumbnail + live status (animated) + action."""
+    box = layout.box()
+    row = box.row()
+
+    icon_id = _thumb_icon_id(job.input_path)
+    if icon_id:
+        row.template_icon(icon_value=icon_id, scale=5.0)
+    else:
+        row.label(text="", icon="IMAGE_DATA")
+
+    col = row.column(align=True)
+    col.label(text=job.model_label or "Render", icon="SHADERFX")
+
+    if job.state == jobs.RUNNING:
+        label = props.STATUS_LABELS.get(job.status, job.status)
+        line = col.row(align=True)
+        if hasattr(line, "progress"):
+            # Sweeping ring driven by the wall clock — animates as the job
+            # manager's timer keeps repainting the panel.
+            line.progress(factor=(time.time() * 0.8) % 1.0, type="RING", text=label)
+        else:
+            frame = _SPINNER_FRAMES[int(time.time() * 12) % len(_SPINNER_FRAMES)]
+            line.label(text="{0} {1}".format(frame, label))
+        line.operator("blmn.cancel_job", text="", icon="X").job_id = job.id
+    elif job.state == jobs.DONE:
+        done = col.row(align=True)
+        done.label(text="Done", icon="CHECKMARK")
+        if job.result_path and os.path.isfile(bpy.path.abspath(job.result_path)):
+            op = done.operator("blmn.show_image", text="View", icon="IMAGE_DATA")
+            op.filepath = job.result_path
+    else:  # FAILED
+        col.label(text="Failed", icon="ERROR")
+        if job.message:
+            sub = col.row()
+            sub.active = False
+            sub.label(text=job.message[:40] + ("…" if len(job.message) > 40 else ""))
+        col.operator("blmn.dismiss_job", text="Dismiss", icon="X").job_id = job.id
 
 
 class BLMN_PT_main(Panel):
@@ -60,7 +98,6 @@ class BLMN_PT_main(Panel):
         layout = self.layout
         sp = context.scene.blmn_ai
         prefs = utils.prefs(context)
-        busy = sp.is_busy()
 
         # --- Update notice (only drawn when a newer release is available) ---
         addon_updater_ops.update_notice_box_ui(self, context)
@@ -96,7 +133,6 @@ class BLMN_PT_main(Panel):
         box.prop(sp, "source", text="")
         # One visual bar of preview target, camera helper, and capture.
         row = box.row(align=True)
-        row.enabled = not busy
         row.operator("blmn.pick_preview_area", text="", icon="EYEDROPPER",
                      depress=operators.BLMN_OT_pick_preview_area.is_active())
         row.operator("blmn.camera_from_view", text="", icon="VIEW_CAMERA")
@@ -153,9 +189,10 @@ class BLMN_PT_main(Panel):
 
         # --- Generate ---
         preview_ready = operators._preview_capture_exists(sp)
+        at_capacity = not jobs.can_start()
         col = layout.column()
         col.scale_y = 1.5
-        col.enabled = not busy and preview_ready
+        col.enabled = preview_ready and not at_capacity
         cost = sp.estimated_credits()
         cost_label = "Generate ({0} credit{1})".format(cost, "" if cost == 1 else "s") \
             if cost else "Generate (no credits)"
@@ -164,14 +201,20 @@ class BLMN_PT_main(Panel):
             row = layout.row()
             row.active = False
             row.label(text="Click Preview before Generate", icon="INFO")
+        elif at_capacity:
+            row = layout.row()
+            row.active = False
+            row.label(text="Max {0} running".format(jobs.MAX_CONCURRENT), icon="INFO")
 
-        # --- Status ---
-        row = layout.row()
-        row.label(text=sp.status_label(), icon=_status_icon(sp.status))
-        if busy:
-            row.label(text="Esc to cancel")
-        if sp.status == props.STATUS_FAILED and sp.status_message:
-            layout.label(text=sp.status_message, icon="INFO")
+        # --- Generating tray (live, animated) ---
+        tray = jobs.tray()
+        if tray:
+            box = layout.box()
+            active = jobs.active_count()
+            header = "Generating ({0})".format(active) if active else "Recent"
+            box.label(text=header, icon="RENDER_ANIMATION")
+            for job in tray:
+                _draw_job(box, job)
 
         # --- Result ---
         result_img = _result_image(sp)

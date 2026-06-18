@@ -10,7 +10,7 @@ import importlib
 bl_info = {
     "name": "blmn.ai",
     "author": "blmn.ai <support@blmn.ai>",
-    "version": (1, 1, 4),
+    "version": (1, 2, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar (N) > blmn.ai",
     "description": "Render your viewport or camera view with blmn.ai",
@@ -29,6 +29,7 @@ if "properties" in locals():
     importlib.reload(preferences)
     importlib.reload(capture)
     importlib.reload(history)
+    importlib.reload(jobs)
     importlib.reload(operators)
     importlib.reload(panels)
 else:
@@ -40,6 +41,7 @@ else:
     from . import preferences
     from . import capture
     from . import history
+    from . import jobs
     from . import operators
     from . import panels
 
@@ -58,6 +60,9 @@ def register():
 
 
 def unregister():
+    # Stop any in-flight render jobs and their app timer before tearing down.
+    jobs.shutdown()
+
     if hasattr(bpy.types.Scene, "blmn_ai"):
         del bpy.types.Scene.blmn_ai
 

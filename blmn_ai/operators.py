@@ -6,22 +6,16 @@ drains a thread-safe event queue, so Blender's UI never freezes and all
 bpy.data writes stay on the main thread.
 """
 import os
-import queue
-import threading
+import shutil
 
 import bpy
 from bpy.types import Operator
 
 from . import properties as props
 from . import capture
-from . import history
+from . import jobs
 from . import net
 from . import utils
-
-
-def _set_status(scene_props, status, message=""):
-    scene_props.status = status
-    scene_props.status_message = message
 
 
 def kick_credits_refresh(context, force=False):
@@ -114,10 +108,6 @@ class BLMN_OT_capture_preview(Operator):
     bl_description = "Capture the chosen view and show it in the Image Editor (nothing is uploaded)"
     bl_options = {"REGISTER"}
 
-    @classmethod
-    def poll(cls, context):
-        return not context.scene.blmn_ai.is_busy()
-
     def execute(self, context):
         sp = context.scene.blmn_ai
         try:
@@ -143,23 +133,16 @@ def _preview_capture_exists(sp):
 class BLMN_OT_generate(Operator):
     bl_idname = "blmn.generate_render"
     bl_label = "Generate Render"
-    bl_description = "Render the last Preview capture with blmn.ai (charges credits like the web app)"
+    bl_description = ("Render the last Preview capture with blmn.ai (charges credits like "
+                     "the web app). Fire several — each runs concurrently in the panel")
     bl_options = {"REGISTER"}
-
-    _timer = None
-    _thread = None
-    _events = None
-    _cancel = None
-    _out_dir = ""
-    _capture_path = ""
-    _model_label = ""
 
     @classmethod
     def poll(cls, context):
         sp = context.scene.blmn_ai
-        if sp.is_busy():
-            return False
-        return utils.prefs(context).connected() and _preview_capture_exists(sp)
+        return (utils.prefs(context).connected()
+                and _preview_capture_exists(sp)
+                and jobs.can_start())
 
     def execute(self, context):
         sp = context.scene.blmn_ai
@@ -173,90 +156,69 @@ class BLMN_OT_generate(Operator):
             self.report({"ERROR"}, "Click Preview first so Generate has a captured image to render.")
             return {"CANCELLED"}
 
+        if not jobs.can_start():
+            self.report({"WARNING"}, "Too many renders in progress — wait for one to finish.")
+            return {"CANCELLED"}
+
         # Install any CF Access headers before the worker thread starts (the
         # thread reads the module-level headers set here on the main thread).
         prefs.apply_access()
 
         try:
-            self._out_dir = utils.get_output_dir(context)
+            out_dir = utils.get_output_dir(context)
         except ValueError as exc:
-            _set_status(sp, props.STATUS_FAILED, str(exc))
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
 
-        self._capture_path = bpy.path.abspath(sp.last_capture_path)
-        self._model_label = dict((m[0], m[1]) for m in props.MODELS).get(sp.model, sp.model)
-
-        # --- Hand the network pipeline to a worker thread ---
-        self._events = queue.Queue()
-        self._cancel = threading.Event()
-        self._thread = threading.Thread(
-            target=net.run_render_job,
-            args=(prefs.api_base(), prefs.device_token, self._capture_path,
-                  sp.prompt.strip(), build_render_request(sp), self._out_dir,
-                  self._events, self._cancel, sp.reference_paths()),
-            daemon=True,
-        )
-        self._thread.start()
-
-        _set_status(sp, props.STATUS_UPLOADING)
-        wm = context.window_manager
-        self._timer = wm.event_timer_add(0.25, window=context.window)
-        wm.modal_handler_add(self)
-        return {"RUNNING_MODAL"}
-
-    def modal(self, context, event):
-        sp = context.scene.blmn_ai
-
-        if event.type == "ESC":
-            self._cancel.set()
-            _set_status(sp, props.STATUS_IDLE)
-            self.report({"INFO"}, "Cancelled. A render that was already queued may "
-                                  "still appear in your blmn.ai library.")
-            return self._finish(context, cancelled=True)
-
-        if event.type != "TIMER":
-            return {"PASS_THROUGH"}
-
+        # Snapshot the current Preview into a per-job input file so each tray
+        # item has its own stable thumbnail (and a re-Preview can't disturb an
+        # in-flight upload).
+        capture_path = bpy.path.abspath(sp.last_capture_path)
+        input_path = os.path.join(out_dir, utils.make_unique_filename("input"))
         try:
-            while True:
-                kind, data = self._events.get_nowait()
-                if kind == "status":
-                    _set_status(sp, data)
-                elif kind == "error":
-                    _set_status(sp, props.STATUS_FAILED, data)
-                    self.report({"ERROR"}, data)
-                    return self._finish(context)
-                elif kind == "finished":
-                    return self._on_finished(context, sp, data)
-        except queue.Empty:
-            pass
+            shutil.copyfile(capture_path, input_path)
+        except OSError as exc:
+            utils.log("Could not copy capture for job:", exc)
+            input_path = capture_path  # fall back to the shared capture
 
-        _tag_redraw(context)
-        return {"RUNNING_MODAL"}
+        model_label = dict((m[0], m[1]) for m in props.MODELS).get(sp.model, sp.model)
 
-    def _on_finished(self, context, sp, data):
-        result_path = data["result_path"]
-        sp.last_result_path = result_path
-        img = utils.load_image(result_path, name="blmn_result")
-        utils.open_in_image_editor(img, context)
-
-        history.add(
-            self._out_dir, sp.prompt.strip(), self._model_label,
-            self._capture_path, result_path,
+        jobs.start_job(
+            prefs.api_base(), prefs.device_token, input_path, sp.prompt.strip(),
+            model_label, build_render_request(sp), out_dir, sp.reference_paths(),
         )
+
+        running = jobs.active_count()
+        self.report({"INFO"}, "Generation started ({0} running).".format(running))
         utils.tag_redraw_all()
+        return {"FINISHED"}
 
-        _set_status(sp, props.STATUS_FINISHED)
-        self.report({"INFO"}, "Render finished.")
-        return self._finish(context)
 
-    def _finish(self, context, cancelled=False):
-        if self._timer is not None:
-            context.window_manager.event_timer_remove(self._timer)
-            self._timer = None
-        _tag_redraw(context)
-        return {"CANCELLED"} if cancelled else {"FINISHED"}
+class BLMN_OT_cancel_job(Operator):
+    bl_idname = "blmn.cancel_job"
+    bl_label = "Cancel Generation"
+    bl_description = ("Stop this generation. A render already queued on the server may still "
+                     "appear in your blmn.ai library")
+    bl_options = {"REGISTER", "INTERNAL"}
+
+    job_id: bpy.props.IntProperty(default=-1)
+
+    def execute(self, context):
+        jobs.cancel_job(self.job_id)
+        return {"FINISHED"}
+
+
+class BLMN_OT_dismiss_job(Operator):
+    bl_idname = "blmn.dismiss_job"
+    bl_label = "Dismiss"
+    bl_description = "Remove this finished item from the list"
+    bl_options = {"REGISTER", "INTERNAL"}
+
+    job_id: bpy.props.IntProperty(default=-1)
+
+    def execute(self, context):
+        jobs.dismiss_job(self.job_id)
+        return {"FINISHED"}
 
 
 class BLMN_OT_refresh_credits(Operator):
@@ -534,15 +496,11 @@ class BLMN_OT_remove_reference(Operator):
         return {"FINISHED"}
 
 
-def _tag_redraw(context):
-    for area in context.screen.areas:
-        if area.type == "VIEW_3D":
-            area.tag_redraw()
-
-
 _classes = (
     BLMN_OT_capture_preview,
     BLMN_OT_generate,
+    BLMN_OT_cancel_job,
+    BLMN_OT_dismiss_job,
     BLMN_OT_refresh_credits,
     BLMN_OT_refresh_history,
     BLMN_OT_edit_prompt,
