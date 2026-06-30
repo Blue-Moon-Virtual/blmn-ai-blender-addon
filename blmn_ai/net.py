@@ -411,7 +411,8 @@ def save_result_to_library(api_base, token, url, prompt, generation):
 # ---------------- Job orchestration (worker thread) ----------------
 
 def run_render_job(api_base, token, capture_path, prompt, render_request, output_dir,
-                   events, cancel_event, reference_paths=None):
+                   events, cancel_event, reference_paths=None, extra_images=None,
+                   result_ext="png"):
     """Full pipeline: upload → start → wait → download → persist to library.
 
     render_request: dict with keys 'route', 'wait_route', 'payload' (payload is
@@ -419,6 +420,14 @@ def run_render_job(api_base, token, capture_path, prompt, render_request, output
 
     reference_paths: optional list of local image paths (max 4) uploaded and
     sent as referenceImageUrls, mirroring the web tool.
+
+    extra_images: optional list of (payload_key, local_path) tuples. Each image
+    is uploaded the same way as the capture and its stored URL is written to
+    payload[payload_key]. Used by the animation flow to attach the last frame
+    (the first frame goes through capture_path/image_key like an image render).
+
+    result_ext: file extension for the downloaded result ('png' for images,
+    'mp4' for animations).
 
     Emits (kind, data) tuples into the events queue:
       ('status', 'UPLOADING' | 'QUEUED' | 'RENDERING' | 'DOWNLOADING')
@@ -433,6 +442,15 @@ def run_render_job(api_base, token, capture_path, prompt, render_request, output
 
         payload = dict(render_request["payload"])
         payload[render_request.get("image_key", "imageUrl")] = image_url
+
+        # Extra named images (e.g. the animation's last frame). Uploaded the
+        # same way as the capture, then written to their payload key.
+        for payload_key, img_path in (extra_images or []):
+            if cancel_event.is_set():
+                raise ApiError("Cancelled.")
+            if img_path and os.path.isfile(img_path):
+                payload[payload_key] = upload_image(
+                    api_base, token, img_path, prompt, kind="blender-capture")
 
         # Reference images (optional, max 4) — uploaded the same way as the
         # capture, then passed as referenceImageUrls (same field the web uses).
@@ -470,7 +488,7 @@ def run_render_job(api_base, token, capture_path, prompt, render_request, output
             )
 
         events.put(("status", "DOWNLOADING"))
-        result_path = os.path.join(output_dir, utils.make_filename("result"))
+        result_path = os.path.join(output_dir, utils.make_filename("result", result_ext))
         download_file(result_url, result_path)
 
         save_result_to_library(api_base, token, result_url, prompt, generation)

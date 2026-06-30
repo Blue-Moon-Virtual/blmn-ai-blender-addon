@@ -30,7 +30,7 @@ def load(output_dir):
         return []
 
 
-def add(output_dir, prompt, model_label, capture_path, result_path):
+def add(output_dir, prompt, model_label, capture_path, result_path, kind="image"):
     entries = load(output_dir)
     entries.insert(0, {
         "time": time.time(),
@@ -39,6 +39,7 @@ def add(output_dir, prompt, model_label, capture_path, result_path):
         "model": model_label,
         "capture_path": capture_path,
         "result_path": result_path,
+        "kind": kind,  # "image" | "video"
     })
 
     try:

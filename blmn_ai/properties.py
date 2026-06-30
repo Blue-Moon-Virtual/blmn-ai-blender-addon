@@ -44,6 +44,28 @@ PROMPT_MAX = 1000
 # Maximum reference images, matching the web tool and backend (slice(0, 4)).
 MAX_REFERENCES = 4
 
+# Generation mode: a still image render (the original feature) or an
+# image-to-video animation between a first and last captured frame.
+MODE_IMAGE = "IMAGE"
+MODE_ANIMATION = "ANIMATION"
+GEN_MODES = [
+    (MODE_IMAGE, "Image", "Render a still image from your view"),
+    (MODE_ANIMATION, "Animation",
+     "Generate a video that animates between a first and last captured frame"),
+]
+
+# Image-to-video. The model is fixed server-side (Kling v3 image-to-video, via
+# the /api/fal/animate endpoint); the client never chooses it, so this is only
+# a display label for the panel, tray and history.
+VIDEO_MODEL_LABEL = "Kling v3"
+
+# Video clip length in seconds. The animate endpoint accepts 5 or 10 (it snaps
+# anything >= 8 to 10, otherwise 5). Cost: 5s = 8 credits, 10s = 16 credits.
+VIDEO_DURATIONS = [
+    ("5", "5s", "Five second clip (8 credits)"),
+    ("10", "10s", "Ten second clip (16 credits)"),
+]
+
 # (wire id, label, description) — same ids the web app sends.
 MODELS = [
     ("light", "Light", "Fast all-round render model (1 credit, 2 in HD)"),
@@ -102,12 +124,32 @@ def estimate_credits(model, resolution, hd, reference_count=0):
     return base + max(0, int(reference_count))
 
 
+def estimate_video_credits(duration):
+    """Mirror of the animate endpoint's cost: 5s = 8 credits, 10s = 16 credits.
+
+    The server snaps any duration >= 8 to 10 seconds, otherwise 5. Server cost
+    is authoritative; this is the UI preview only.
+    """
+    try:
+        seconds = int(duration)
+    except (TypeError, ValueError):
+        seconds = 5
+    return 16 if seconds >= 8 else 8
+
+
 class BLMNReferenceImage(PropertyGroup):
     """One reference image path the AI uses to guide style/materials."""
     path: StringProperty(name="Reference", subtype="FILE_PATH", default="")
 
 
 class BLMNProperties(PropertyGroup):
+    mode: EnumProperty(
+        name="Mode",
+        description="Render a still image or generate an animation between two frames",
+        items=GEN_MODES,
+        default=MODE_IMAGE,
+    )
+
     source: EnumProperty(
         name="Source",
         description="Where the reference image is captured from",
@@ -128,6 +170,13 @@ class BLMNProperties(PropertyGroup):
         description="Which blmn.ai model renders your view",
         items=MODELS,
         default="light",
+    )
+
+    video_duration: EnumProperty(
+        name="Duration",
+        description="Length of the generated clip",
+        items=VIDEO_DURATIONS,
+        default="5",
     )
 
     render_type: EnumProperty(
@@ -191,11 +240,19 @@ class BLMNProperties(PropertyGroup):
     last_capture_path: StringProperty(name="Last Capture", default="", subtype="FILE_PATH")
     last_result_path: StringProperty(name="Last Result", default="", subtype="FILE_PATH")
 
+    # Animation mode: the two captured key frames and the latest video result.
+    first_frame_path: StringProperty(name="First Frame", default="", subtype="FILE_PATH")
+    last_frame_path: StringProperty(name="Last Frame", default="", subtype="FILE_PATH")
+    last_video_path: StringProperty(name="Last Animation", default="", subtype="FILE_PATH")
+
     def status_label(self):
         return STATUS_LABELS.get(self.status, self.status)
 
     def is_busy(self):
         return self.status in BUSY_STATUSES
+
+    def is_animation(self):
+        return self.mode == MODE_ANIMATION
 
     def supports_resolution(self):
         return self.model in RESOLUTION_MODELS
@@ -210,6 +267,8 @@ class BLMNProperties(PropertyGroup):
         return out
 
     def estimated_credits(self):
+        if self.is_animation():
+            return estimate_video_credits(self.video_duration)
         return estimate_credits(self.model, self.resolution, self.hd, len(self.references))
 
 

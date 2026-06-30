@@ -47,6 +47,26 @@ def _thumb_icon_id(result_path):
     return entry.icon_id
 
 
+def _draw_frame_slot(layout, sp, frame_path, slot, label):
+    """One animation key-frame row: thumbnail + Capture/Recapture button."""
+    box = layout.box()
+    row = box.row()
+
+    has_frame = bool(frame_path) and os.path.isfile(bpy.path.abspath(frame_path))
+    icon_id = _thumb_icon_id(frame_path) if has_frame else 0
+    if icon_id:
+        row.template_icon(icon_value=icon_id, scale=5.0)
+    else:
+        row.label(text="", icon="IMAGE_DATA")
+
+    col = row.column(align=True)
+    col.label(text=label, icon="CHECKMARK" if has_frame else "ADD")
+    op = col.operator("blmn.capture_frame",
+                      text="Recapture" if has_frame else "Capture",
+                      icon="HIDE_OFF")
+    op.slot = slot
+
+
 def _draw_job(layout, job):
     """One generating-tray row: input thumbnail + live status (animated) + action."""
     box = layout.box()
@@ -76,8 +96,12 @@ def _draw_job(layout, job):
         done = col.row(align=True)
         done.label(text="Done", icon="CHECKMARK")
         if job.result_path and os.path.isfile(bpy.path.abspath(job.result_path)):
-            op = done.operator("blmn.show_image", text="View", icon="IMAGE_DATA")
-            op.filepath = job.result_path
+            if job.is_video:
+                done.operator("blmn.open_output_folder", text="Folder",
+                              icon="FILE_FOLDER")
+            else:
+                op = done.operator("blmn.show_image", text="View", icon="IMAGE_DATA")
+                op.filepath = job.result_path
     else:  # FAILED
         col.label(text="Failed", icon="ERROR")
         if job.message:
@@ -127,37 +151,54 @@ class BLMN_PT_main(Panel):
             row.operator("blmn.link_account", text="", icon="LINKED")
             return
 
+        # --- Mode (Image render vs Animation) ---
+        row = layout.row(align=True)
+        row.prop(sp, "mode", expand=True)
+
         # --- Input ---
         box = layout.box()
         box.label(text="Capture", icon="OUTLINER_OB_CAMERA")
         box.prop(sp, "source", text="")
-        # One visual bar of preview target, camera helper, and capture.
+        # Shared helpers: pick the preview area and build a camera from the view.
         row = box.row(align=True)
         row.operator("blmn.pick_preview_area", text="", icon="EYEDROPPER",
                      depress=operators.BLMN_OT_pick_preview_area.is_active())
         row.operator("blmn.camera_from_view", text="", icon="VIEW_CAMERA")
-        row.operator("blmn.capture_preview", text="Preview", icon="HIDE_OFF")
+        if sp.is_animation():
+            _draw_frame_slot(box, sp, sp.first_frame_path, "FIRST", "First Frame")
+            _draw_frame_slot(box, sp, sp.last_frame_path, "LAST", "Last Frame")
+        else:
+            row.operator("blmn.capture_preview", text="Preview", icon="HIDE_OFF")
 
         # --- Model + settings ---
         box = layout.box()
-        box.label(text="Render Settings", icon="SHADERFX")
-        box.prop(sp, "model", text="Model")
-        row = box.row(align=True)
-        row.prop(sp, "render_type", expand=True)
-        box.prop(sp, "image_style", text="Style")
-        if sp.supports_resolution():
+        if sp.is_animation():
+            box.label(text="Animation Settings", icon="RENDER_ANIMATION")
+            info = box.row()
+            info.active = False
+            info.label(text="Model: {0}".format(props.VIDEO_MODEL_LABEL), icon="SHADERFX")
+            box.label(text="Duration")
             row = box.row(align=True)
-            row.prop(sp, "resolution", expand=True)
-        elif sp.model == "light":
-            box.prop(sp, "hd")
-
-        col = box.column(align=True)
-        col.prop(sp, "creativity", slider=True)
-        if sp.render_type == "exterior":
-            col.prop(sp, "environment_fill", slider=True)
+            row.prop(sp, "video_duration", expand=True)
         else:
-            col.prop(sp, "decoration_fill", slider=True)
-        box.prop(sp, "seed")
+            box.label(text="Render Settings", icon="SHADERFX")
+            box.prop(sp, "model", text="Model")
+            row = box.row(align=True)
+            row.prop(sp, "render_type", expand=True)
+            box.prop(sp, "image_style", text="Style")
+            if sp.supports_resolution():
+                row = box.row(align=True)
+                row.prop(sp, "resolution", expand=True)
+            elif sp.model == "light":
+                box.prop(sp, "hd")
+
+            col = box.column(align=True)
+            col.prop(sp, "creativity", slider=True)
+            if sp.render_type == "exterior":
+                col.prop(sp, "environment_fill", slider=True)
+            else:
+                col.prop(sp, "decoration_fill", slider=True)
+            box.prop(sp, "seed")
 
         # --- Prompt ---
         box = layout.box()
@@ -173,34 +214,43 @@ class BLMN_PT_main(Panel):
             sub.alignment = "RIGHT"
             sub.label(text="{0} / {1}".format(len(sp.prompt), props.PROMPT_MAX))
 
-        # --- Reference images (optional) ---
-        box = layout.box()
-        header = box.row(align=True)
-        header.label(text="Reference Images (optional)", icon="IMAGE_REFERENCE")
-        header.label(text="{0}/{1}".format(len(sp.references), props.MAX_REFERENCES))
-        for i, ref in enumerate(sp.references):
-            name = os.path.basename(bpy.path.abspath(ref.path)) if ref.path else "(image)"
-            r = box.row(align=True)
-            r.label(text=name, icon="FILE_IMAGE")
-            rm = r.operator("blmn.remove_reference", text="", icon="X")
-            rm.index = i
-        if len(sp.references) < props.MAX_REFERENCES:
-            box.operator("blmn.add_reference", text="Add Reference", icon="ADD")
+        # --- Reference images (optional, image render only) ---
+        if not sp.is_animation():
+            box = layout.box()
+            header = box.row(align=True)
+            header.label(text="Reference Images (optional)", icon="IMAGE_REFERENCE")
+            header.label(text="{0}/{1}".format(len(sp.references), props.MAX_REFERENCES))
+            for i, ref in enumerate(sp.references):
+                name = os.path.basename(bpy.path.abspath(ref.path)) if ref.path else "(image)"
+                r = box.row(align=True)
+                r.label(text=name, icon="FILE_IMAGE")
+                rm = r.operator("blmn.remove_reference", text="", icon="X")
+                rm.index = i
+            if len(sp.references) < props.MAX_REFERENCES:
+                box.operator("blmn.add_reference", text="Add Reference", icon="ADD")
 
         # --- Generate ---
-        preview_ready = operators._preview_capture_exists(sp)
         at_capacity = not jobs.can_start()
+        cost = sp.estimated_credits()
+        if sp.is_animation():
+            ready = operators._animation_frames_exist(sp)
+            verb, op_id, icon = "Animate", "blmn.generate_animation", "RENDER_ANIMATION"
+            not_ready_hint = "Capture both frames before generating"
+        else:
+            ready = operators._preview_capture_exists(sp)
+            verb, op_id, icon = "Generate", "blmn.generate_render", "SHADERFX"
+            not_ready_hint = "Click Preview before Generate"
+
         col = layout.column()
         col.scale_y = 1.5
-        col.enabled = preview_ready and not at_capacity
-        cost = sp.estimated_credits()
-        cost_label = "Generate ({0} credit{1})".format(cost, "" if cost == 1 else "s") \
-            if cost else "Generate (no credits)"
-        col.operator("blmn.generate_render", text=cost_label, icon="SHADERFX")
-        if not preview_ready:
+        col.enabled = ready and not at_capacity
+        cost_label = "{0} ({1} credit{2})".format(verb, cost, "" if cost == 1 else "s") \
+            if cost else "{0} (no credits)".format(verb)
+        col.operator(op_id, text=cost_label, icon=icon)
+        if not ready:
             row = layout.row()
             row.active = False
-            row.label(text="Click Preview before Generate", icon="INFO")
+            row.label(text=not_ready_hint, icon="INFO")
         elif at_capacity:
             row = layout.row()
             row.active = False
@@ -217,14 +267,23 @@ class BLMN_PT_main(Panel):
                 _draw_job(box, job)
 
         # --- Result ---
-        result_img = _result_image(sp)
-        if result_img is not None:
-            box = layout.box()
-            box.label(text="Latest Result", icon="IMAGE_DATA")
-            _draw_image_preview(box, result_img)
-            row = box.row(align=True)
-            row.operator("blmn.view_result", icon="WORKSPACE")
-            row.operator("blmn.open_output_folder", text="Folder", icon="FILE_FOLDER")
+        if sp.is_animation():
+            video_path = (sp.last_video_path or "").strip()
+            if video_path and os.path.isfile(bpy.path.abspath(video_path)):
+                box = layout.box()
+                box.label(text="Latest Animation", icon="FILE_MOVIE")
+                box.label(text=os.path.basename(video_path))
+                box.operator("blmn.open_output_folder", text="Open Folder",
+                             icon="FILE_FOLDER")
+        else:
+            result_img = _result_image(sp)
+            if result_img is not None:
+                box = layout.box()
+                box.label(text="Latest Result", icon="IMAGE_DATA")
+                _draw_image_preview(box, result_img)
+                row = box.row(align=True)
+                row.operator("blmn.view_result", icon="WORKSPACE")
+                row.operator("blmn.open_output_folder", text="Folder", icon="FILE_FOLDER")
 
 
 class BLMN_PT_history(Panel):
@@ -258,21 +317,24 @@ def _draw_wrapped_prompt(layout, prompt):
 
 
 def _draw_history_entry(layout, entry):
-    """One history row: thumbnail + model + prompt (or 'No prompt') + View."""
+    """One history row: thumbnail + model + prompt (or 'No prompt') + View/Folder."""
     result_path = entry.get("result_path", "")
     has_result = bool(result_path) and os.path.isfile(bpy.path.abspath(result_path))
+    is_video = entry.get("kind") == "video"
 
     box = layout.box()
     row = box.row()
 
-    icon_id = _thumb_icon_id(result_path) if has_result else 0
+    # Video results have no image thumbnail; show a film icon instead.
+    icon_id = 0 if is_video else (_thumb_icon_id(result_path) if has_result else 0)
     if icon_id:
         row.template_icon(icon_value=icon_id, scale=5.0)
     else:
-        row.label(text="", icon="IMAGE_DATA")
+        row.label(text="", icon="FILE_MOVIE" if is_video else "IMAGE_DATA")
 
     col = row.column(align=True)
-    col.label(text=entry.get("model") or "Render", icon="SHADERFX")
+    col.label(text=entry.get("model") or "Render",
+              icon="RENDER_ANIMATION" if is_video else "SHADERFX")
 
     prompt = (entry.get("prompt") or "").strip()
     if prompt:
@@ -284,8 +346,11 @@ def _draw_history_entry(layout, entry):
         sub.label(text="No prompt", icon="GREASEPENCIL")
 
     if has_result:
-        op = col.operator("blmn.show_image", text="View", icon="IMAGE_DATA")
-        op.filepath = result_path
+        if is_video:
+            col.operator("blmn.open_output_folder", text="Folder", icon="FILE_FOLDER")
+        else:
+            op = col.operator("blmn.show_image", text="View", icon="IMAGE_DATA")
+            op.filepath = result_path
 
 
 def _draw_image_preview(layout, image):

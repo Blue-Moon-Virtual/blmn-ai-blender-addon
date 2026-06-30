@@ -53,12 +53,13 @@ _seq = 0             # monotonic job id source
 class Job:
     """One in-flight (or just-finished) generation."""
 
-    def __init__(self, job_id, input_path, prompt, model_label, out_dir):
+    def __init__(self, job_id, input_path, prompt, model_label, out_dir, is_video=False):
         self.id = job_id
         self.input_path = input_path        # per-job capture copy; tray thumbnail + upload
         self.prompt = prompt
         self.model_label = model_label
         self.out_dir = out_dir
+        self.is_video = is_video            # animation job → result is an .mp4
         self.status = props.STATUS_UPLOADING
         self.message = ""
         self.state = RUNNING
@@ -84,15 +85,21 @@ def tray():
 
 
 def start_job(api_base, token, input_path, prompt, model_label, render_request,
-              out_dir, reference_paths=None):
-    """Spawn a worker thread for one generation and start tracking it."""
+              out_dir, reference_paths=None, extra_images=None, result_ext="png",
+              is_video=False):
+    """Spawn a worker thread for one generation and start tracking it.
+
+    extra_images / result_ext are forwarded to net.run_render_job; is_video
+    marks the job so the tray and finish handler treat the result as a video.
+    """
     global _seq
     _seq += 1
-    job = Job(_seq, input_path, prompt, model_label, out_dir)
+    job = Job(_seq, input_path, prompt, model_label, out_dir, is_video=is_video)
     job.thread = threading.Thread(
         target=net.run_render_job,
         args=(api_base, token, input_path, prompt, render_request, out_dir,
               job.events, job.cancel, reference_paths),
+        kwargs={"extra_images": extra_images, "result_ext": result_ext},
         daemon=True,
     )
     _JOBS.insert(0, job)
@@ -152,9 +159,20 @@ def _scene_props():
 
 def _on_finished(job):
     """A job succeeded: record history, update the preview window."""
-    history.add(job.out_dir, job.prompt, job.model_label, job.input_path, job.result_path)
+    kind = "video" if job.is_video else "image"
+    history.add(job.out_dir, job.prompt, job.model_label, job.input_path,
+                job.result_path, kind=kind)
 
     sp = _scene_props()
+
+    if job.is_video:
+        # Blender's Image Editor can't play video, so just record the path —
+        # the panel/tray offer an "Open Folder" action to reveal the .mp4.
+        if sp is not None:
+            sp.last_video_path = job.result_path
+            sp.status = props.STATUS_FINISHED
+        return
+
     if sp is not None:
         sp.last_result_path = job.result_path
         sp.status = props.STATUS_FINISHED

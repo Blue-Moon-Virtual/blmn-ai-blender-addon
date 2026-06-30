@@ -102,6 +102,42 @@ def build_render_request(sp):
     }
 
 
+def build_animation_request(sp):
+    """Translate scene settings into the blmn.ai image-to-video wire payload.
+
+    Mirrors the web app's animate endpoint (Kling v3 image-to-video). The model
+    is fixed server-side, so it is not sent; the server composes the system
+    prompt, validates aspect ratio and charges credits (5s = 8, 10s = 16).
+
+    Returns a render_request dict consumed by net.run_render_job:
+      route / wait_route : POST + poll endpoints
+      payload            : JSON body (image URLs are filled in by the worker)
+      image_key          : payload key for the FIRST frame's uploaded URL
+      end_image_key      : payload key for the LAST frame's uploaded URL
+    """
+    # Duration is a number the server snaps to 5 or 10; seed/model are ignored
+    # by the animate endpoint, so we don't send them.
+    try:
+        duration = int(sp.video_duration)
+    except (TypeError, ValueError):
+        duration = 5
+
+    payload = {
+        "userPrompt": sp.prompt.strip(),
+        "duration": duration,
+        # Charge the personal balance — same mode the panel displays.
+        "billingMode": net.BILLING_MODE,
+    }
+
+    return {
+        "route": "/api/fal/animate",
+        "wait_route": "/api/fal/animate/wait",
+        "payload": payload,
+        "image_key": "imageUrl",          # first/start frame
+        "end_image_key": "end_image_url",  # last/end frame
+    }
+
+
 class BLMN_OT_capture_preview(Operator):
     bl_idname = "blmn.capture_preview"
     bl_label = "Preview Capture"
@@ -128,6 +164,16 @@ class BLMN_OT_capture_preview(Operator):
 def _preview_capture_exists(sp):
     path = (sp.last_capture_path or "").strip()
     return bool(path) and os.path.isfile(bpy.path.abspath(path))
+
+
+def _frame_exists(path):
+    path = (path or "").strip()
+    return bool(path) and os.path.isfile(bpy.path.abspath(path))
+
+
+def _animation_frames_exist(sp):
+    """Both the first and last animation frames have been captured."""
+    return _frame_exists(sp.first_frame_path) and _frame_exists(sp.last_frame_path)
 
 
 class BLMN_OT_generate(Operator):
@@ -190,6 +236,116 @@ class BLMN_OT_generate(Operator):
 
         running = jobs.active_count()
         self.report({"INFO"}, "Generation started ({0} running).".format(running))
+        utils.tag_redraw_all()
+        return {"FINISHED"}
+
+
+class BLMN_OT_capture_frame(Operator):
+    bl_idname = "blmn.capture_frame"
+    bl_label = "Capture Frame"
+    bl_description = ("Capture the chosen view as the animation's first or last frame "
+                     "(nothing is uploaded)")
+    bl_options = {"REGISTER"}
+
+    slot: bpy.props.EnumProperty(
+        items=[
+            ("FIRST", "First Frame", "Capture the start frame of the animation"),
+            ("LAST", "Last Frame", "Capture the end frame of the animation"),
+        ],
+        default="FIRST",
+        options={"SKIP_SAVE"},
+    )
+
+    def execute(self, context):
+        sp = context.scene.blmn_ai
+        try:
+            out_dir = utils.get_output_dir(context)
+            kind = "first_frame" if self.slot == "FIRST" else "last_frame"
+            path = os.path.join(out_dir, utils.make_unique_filename(kind))
+            capture.capture_view(context, sp.source, path)
+        except ValueError as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+
+        if self.slot == "FIRST":
+            sp.first_frame_path = path
+        else:
+            sp.last_frame_path = path
+
+        img = utils.load_image(path, name="blmn_frame")
+        utils.open_in_image_editor(img, context)
+        self.report({"INFO"}, "{0} captured.".format(
+            "First frame" if self.slot == "FIRST" else "Last frame"))
+        utils.tag_redraw_all()
+        return {"FINISHED"}
+
+
+class BLMN_OT_generate_animation(Operator):
+    bl_idname = "blmn.generate_animation"
+    bl_label = "Generate Animation"
+    bl_description = ("Animate between the captured first and last frames with blmn.ai "
+                     "(charges credits). Runs concurrently in the panel")
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context):
+        sp = context.scene.blmn_ai
+        return (utils.prefs(context).connected()
+                and _animation_frames_exist(sp)
+                and jobs.can_start())
+
+    def execute(self, context):
+        sp = context.scene.blmn_ai
+        prefs = utils.prefs(context)
+
+        if not prefs.connected():
+            self.report({"ERROR"}, "Connect your blmn.ai account in the add-on preferences first.")
+            return {"CANCELLED"}
+
+        if not _animation_frames_exist(sp):
+            self.report({"ERROR"}, "Capture both a first and last frame before generating.")
+            return {"CANCELLED"}
+
+        if not jobs.can_start():
+            self.report({"WARNING"}, "Too many generations in progress — wait for one to finish.")
+            return {"CANCELLED"}
+
+        prefs.apply_access()
+
+        try:
+            out_dir = utils.get_output_dir(context)
+        except ValueError as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+
+        # Snapshot both frames into per-job input files so a re-capture can't
+        # disturb an in-flight upload (mirrors the image Generate flow).
+        first_src = bpy.path.abspath(sp.first_frame_path)
+        last_src = bpy.path.abspath(sp.last_frame_path)
+        first_input = os.path.join(out_dir, utils.make_unique_filename("anim_first"))
+        last_input = os.path.join(out_dir, utils.make_unique_filename("anim_last"))
+        try:
+            shutil.copyfile(first_src, first_input)
+            shutil.copyfile(last_src, last_input)
+        except OSError as exc:
+            utils.log("Could not copy frames for animation job:", exc)
+            first_input, last_input = first_src, last_src  # fall back to shared captures
+
+        model_label = props.VIDEO_MODEL_LABEL
+
+        request = build_animation_request(sp)
+        # The last frame rides along as an extra named upload; the first frame
+        # goes through the standard capture/image_key path.
+        extra_images = [(request["end_image_key"], last_input)]
+
+        jobs.start_job(
+            prefs.api_base(), prefs.device_token, first_input, sp.prompt.strip(),
+            model_label, request, out_dir,
+            extra_images=extra_images, result_ext="mp4", is_video=True,
+        )
+
+        running = jobs.active_count()
+        self.report({"INFO"}, "Animation started ({0} running).".format(running))
         utils.tag_redraw_all()
         return {"FINISHED"}
 
@@ -499,6 +655,8 @@ class BLMN_OT_remove_reference(Operator):
 _classes = (
     BLMN_OT_capture_preview,
     BLMN_OT_generate,
+    BLMN_OT_capture_frame,
+    BLMN_OT_generate_animation,
     BLMN_OT_cancel_job,
     BLMN_OT_dismiss_job,
     BLMN_OT_refresh_credits,
